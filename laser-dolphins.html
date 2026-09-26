@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Laser Dolphins</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&family=Rubik:wght@400;600&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --deep: #04161f;
+    --sea: #0e5566;
+    --foam: #cdf3f6;
+    --laser: #ff3d8b;
+    --cap: #ffb13b;
+    --ink: #e8f7f9;
+    --muted: #8fb9c2;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--deep);
+    color: var(--ink);
+    font-family: 'Rubik', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    overflow: hidden;
+  }
+  #wrap { position: relative; height: 100%; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .hud {
+    position: absolute; top: 12px; left: 16px; right: 16px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    pointer-events: none; font-variant-numeric: tabular-nums;
+  }
+  .hud .score { font-family: 'Bungee', 'Rubik', sans-serif; font-size: 28px; letter-spacing: .02em; text-shadow: 0 2px 0 rgba(0,0,0,.35); }
+  .hud .meta { display: flex; gap: 16px; font-size: 14px; color: var(--foam); text-transform: uppercase; letter-spacing: .08em; }
+  .hud .lives { color: var(--laser); letter-spacing: .15em; font-size: 18px; }
+  .overlay {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    padding-inline: 16px; background: rgba(4, 22, 31, .6);
+  }
+  .card { max-width: 440px; text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .eyebrow { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+  h1 {
+    margin: 0; font-family: 'Bungee', 'Rubik', sans-serif; font-weight: 400;
+    font-size: clamp(40px, 11vw, 72px); line-height: .95; text-wrap: balance;
+    color: var(--foam);
+    text-shadow: 0 0 18px rgba(255, 61, 139, .55), 0 4px 0 #0b3442;
+  }
+  h1 span { color: var(--laser); }
+  p { margin: 0; line-height: 1.5; color: var(--foam); text-wrap: balance; }
+  .keys { font-size: 14px; color: var(--muted); }
+  kbd {
+    font-family: inherit; font-size: 12px; padding: 2px 7px; border-radius: 5px;
+    border: 1px solid #2d6f7e; background: #0b3442; color: var(--ink);
+  }
+  button {
+    font-family: 'Bungee', 'Rubik', sans-serif; font-size: 20px; letter-spacing: .04em;
+    color: #2a0716; background: var(--laser); border: 0; border-radius: 999px;
+    padding: 14px 34px; cursor: pointer;
+    box-shadow: 0 0 0 4px rgba(255, 61, 139, .25), 0 8px 24px rgba(255, 61, 139, .35);
+    transition: transform .12s ease;
+  }
+  button:hover { transform: translateY(-2px); }
+  button:focus-visible { outline: 3px solid var(--foam); outline-offset: 4px; }
+  .stats { display: flex; gap: 28px; font-variant-numeric: tabular-nums; }
+  .stats div { display: flex; flex-direction: column; gap: 2px; }
+  .stats b { font-family: 'Bungee', 'Rubik', sans-serif; font-weight: 400; font-size: 32px; color: var(--ink); }
+  .stats small { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+
+<div id="wrap">
+  <canvas id="game" aria-label="Laser Dolphins game area"></canvas>
+  <div class="hud">
+    <div class="score" id="score">0</div>
+    <div class="meta"><span id="level">Wave 1</span><span class="lives" id="lives">♥♥♥</span></div>
+  </div>
+
+  <div class="overlay" id="startScreen">
+    <div class="card">
+      <div class="eyebrow">An open-water survival game</div>
+      <h1>Laser <span>Dolphins</span></h1>
+      <p>The pod below has blowhole lasers and a grudge. Stay on the surface, watch for the glowing blowholes, and swim out of the beam.</p>
+      <p class="keys"><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> to swim · on a phone, drag your finger</p>
+      <button id="startBtn" type="button">Dive in</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="overScreen" hidden>
+    <div class="card">
+      <div class="eyebrow">Zapped by the pod</div>
+      <h1>Game <span>Over</span></h1>
+      <div class="stats">
+        <div><b id="finalScore">0</b><small>Score</small></div>
+        <div><b id="bestScore">0</b><small>Best</small></div>
+        <div><b id="finalWave">1</b><small>Wave</small></div>
+      </div>
+      <button id="againBtn" type="button">Swim again</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cv = document.getElementById('game');
+  const ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  let W = 0, H = 0, DPR = 1, surfaceY = 0;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    surfaceY = Math.max(90, H * 0.2);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  let best = 0;
+  try { best = +localStorage.getItem('laserDolphinsBest') || 0; } catch (e) {}
+
+  // ---------- state ----------
+  let state = 'menu';
+  let time = 0, lives = 3, invuln = 0, shake = 0, level = 1;
+  let swimmer, dolphins = [], sparks = [], bubbles = [], kelp = [];
+  const keys = {};
+  let pointerX = null;
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  function makeKelp() {
+    kelp = [];
+    const n = Math.ceil(W / 70);
+    for (let i = 0; i < n; i++) kelp.push({ x: i * 70 + rand(-20, 20), h: rand(60, 160), p: rand(0, 6) });
+  }
+  function makeBubbles() {
+    bubbles = [];
+    for (let i = 0; i < 40; i++) bubbles.push({ x: rand(0, W), y: rand(surfaceY, H), r: rand(1, 3.5), s: rand(15, 45) });
+  }
+
+  function newDolphin(delay) {
+    const dir = Math.random() < .5 ? -1 : 1;
+    return {
+      x: rand(60, W - 60),
+      y: rand(surfaceY + 110, H - 70),
+      vx: dir * rand(50, 110),
+      dir,
+      state: 'swim',
+      t: delay,
+      bob: rand(0, 6),
+      bx: 0, by: 0, tx: 0, ty: 0,
+    };
+  }
+
+  function reset() {
+    resize(); makeKelp(); makeBubbles();
+    time = 0; lives = 3; invuln = 1.5; shake = 0; level = 1;
+    swimmer = { x: W / 2, vx: 0, stroke: 0 };
+    dolphins = [newDolphin(rand(1.5, 2.5)), newDolphin(rand(2.5, 3.5))];
+    sparks = [];
+  }
+
+  function difficulty() {
+    level = 1 + Math.floor(time / 15);
+    return {
+      count: Math.min(2 + level, 9),
+      charge: Math.max(.45, 1.05 - .07 * (level - 1)),
+      cool: Math.max(.6, 2.6 - .2 * (level - 1)),
+      aimChance: Math.min(.12 * (level - 1), .65),
+    };
+  }
+
+  // ---------- input ----------
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if ((e.key === ' ' || e.key === 'Enter') && state !== 'play') { e.preventDefault(); start(); }
+    if (['arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+  cv.addEventListener('pointerdown', e => { pointerX = e.offsetX; });
+  cv.addEventListener('pointermove', e => { if (pointerX !== null || e.pointerType === 'mouse' && e.buttons) pointerX = e.offsetX; });
+  window.addEventListener('pointerup', () => { pointerX = null; });
+  window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+  $('startBtn').onclick = start;
+  $('againBtn').onclick = start;
+
+  function start() {
+    reset();
+    state = 'play';
+    $('startScreen').hidden = true;
+    $('overScreen').hidden = true;
+  }
+
+  function gameOver() {
+    state = 'over';
+    const score = Math.floor(time * 10);
+    if (score > best) { best = score; try { localStorage.setItem('laserDolphinsBest', best); } catch (e) {} }
+    $('finalScore').textContent = score;
+    $('bestScore').textContent = best;
+    $('finalWave').textContent = level;
+    $('overScreen').hidden = false;
+    $('againBtn').focus();
+  }
+
+  // ---------- update ----------
+  function update(dt) {
+    const d = difficulty();
+    time += dt;
+    invuln = Math.max(0, invuln - dt);
+    shake = Math.max(0, shake - dt * 30);
+
+    // swimmer
+    const maxV = 380;
+    let want = 0;
+    if (keys['arrowleft'] || keys['a']) want -= 1;
+    if (keys['arrowright'] || keys['d']) want += 1;
+    if (pointerX !== null && !want) {
+      const diff = pointerX - swimmer.x;
+      want = Math.abs(diff) < 4 ? 0 : Math.max(-1, Math.min(1, diff / 40));
+    }
+    swimmer.vx += (want * maxV - swimmer.vx) * Math.min(1, dt * 10);
+    swimmer.x = Math.max(20, Math.min(W - 20, swimmer.x + swimmer.vx * dt));
+    swimmer.stroke += dt * (4 + Math.abs(swimmer.vx) / 40);
+
+    // add dolphins as waves rise
+    while (dolphins.length < d.count) dolphins.push(newDolphin(rand(1, 2)));
+
+    const sy = surfaceY;
+    for (const f of dolphins) {
+      f.bob += dt * 3;
+      f.t -= dt;
+      if (f.state === 'swim') {
+        f.x += f.vx * dt;
+        if (f.x < 50) { f.x = 50; f.vx = Math.abs(f.vx); }
+        if (f.x > W - 50) { f.x = W - 50; f.vx = -Math.abs(f.vx); }
+        f.dir = Math.sign(f.vx) || f.dir;
+        if (f.t <= 0) {
+          f.state = 'charge'; f.t = d.charge;
+          f.bx = f.x + 6 * f.dir; f.by = f.y - 16;
+          const aimed = Math.random() < d.aimChance;
+          f.tx = aimed ? swimmer.x + swimmer.vx * d.charge * .4 + rand(-20, 20) : f.bx;
+          f.ty = sy;
+        }
+      } else if (f.state === 'charge') {
+        if (f.t <= 0) { f.state = 'fire'; f.t = .38; shake = Math.max(shake, 3); }
+      } else if (f.state === 'fire') {
+        if (invuln <= 0 && beamHits(f)) hit();
+        if (f.t <= 0) { f.state = 'swim'; f.t = rand(d.cool * .6, d.cool * 1.4); }
+      }
+    }
+
+    for (const b of bubbles) {
+      b.y -= b.s * dt; b.x += Math.sin(b.y / 30) * dt * 6;
+      if (b.y < surfaceY) { b.y = H + rand(0, 40); b.x = rand(0, W); }
+    }
+    for (const s of sparks) { s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 400 * dt; s.life -= dt; }
+    sparks = sparks.filter(s => s.life > 0);
+
+    $('score').textContent = Math.floor(time * 10);
+    $('level').textContent = 'Wave ' + level;
+    $('lives').textContent = '♥'.repeat(lives) + '♡'.repeat(3 - lives);
+  }
+
+  function beamHits(f) {
+    const px = swimmer.x, py = surfaceY - 4;
+    let dx = f.tx - f.bx, dy = f.ty - f.by;
+    const len = Math.hypot(dx, dy); dx /= len; dy /= len;
+    const t = (px - f.bx) * dx + (py - f.by) * dy;
+    if (t < 0) return false;
+    const perp = Math.abs((px - f.bx) * dy - (py - f.by) * dx);
+    return perp < 7 + 12;
+  }
+
+  function hit() {
+    lives--; invuln = 1.6; shake = 12;
+    for (let i = 0; i < 26; i++) {
+      const a = rand(0, Math.PI * 2), sp = rand(80, 320);
+      sparks.push({ x: swimmer.x, y: surfaceY - 6, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, life: rand(.4, .9) });
+    }
+    if (lives <= 0) gameOver();
+  }
+
+  // ---------- draw ----------
+  function wave(x, t) { return Math.sin(x / 38 + t * 2.2) * 3 + Math.sin(x / 91 - t * 1.3) * 4; }
+
+  function drawScene(t) {
+    // sky
+    const sky = ctx.createLinearGradient(0, 0, 0, surfaceY);
+    sky.addColorStop(0, '#12394a'); sky.addColorStop(1, '#3f9aa8');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, surfaceY + 10);
+
+    // water
+    const sea = ctx.createLinearGradient(0, surfaceY, 0, H);
+    sea.addColorStop(0, '#11707f'); sea.addColorStop(.45, '#0a3f4f'); sea.addColorStop(1, '#04161f');
+    ctx.fillStyle = sea;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 12) ctx.lineTo(x, surfaceY + wave(x, t));
+    ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+
+    // light rays
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 5; i++) {
+      const cx = (W / 5) * (i + .5) + Math.sin(t * .4 + i) * 40;
+      const g = ctx.createLinearGradient(0, surfaceY, 0, H * .85);
+      g.addColorStop(0, 'rgba(160, 235, 240, .10)'); g.addColorStop(1, 'rgba(160, 235, 240, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(cx - 20, surfaceY); ctx.lineTo(cx + 20, surfaceY);
+      ctx.lineTo(cx + 90, H * .85); ctx.lineTo(cx - 30, H * .85); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+
+    // bubbles
+    ctx.fillStyle = 'rgba(205, 243, 246, .35)';
+    for (const b of bubbles) { ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); }
+
+    // seafloor + kelp
+    ctx.strokeStyle = '#0d4a3a'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+    for (const k of kelp) {
+      ctx.beginPath(); ctx.moveTo(k.x, H);
+      for (let s = 1; s <= 6; s++) {
+        const y = H - (k.h / 6) * s;
+        ctx.lineTo(k.x + Math.sin(t * 1.2 + k.p + s * .6) * s * 3, y);
+      }
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#082a2c';
+    ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 40) ctx.lineTo(x, H - 18 - Math.sin(x / 70) * 8);
+    ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+
+    // surface line
+    ctx.strokeStyle = 'rgba(205, 243, 246, .75)'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 12) { const y = surfaceY + wave(x, t); x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.stroke();
+  }
+
+  function drawDolphin(f, t) {
+    const y = f.y + Math.sin(f.bob) * 4;
+    ctx.save();
+    ctx.translate(f.x, y);
+    ctx.scale(f.dir, 1);
+    const wag = Math.sin(f.bob * 2.4) * 4;
+    const body = ctx.createLinearGradient(0, -18, 0, 14);
+    body.addColorStop(0, '#5f7f95'); body.addColorStop(1, '#a9c1cf');
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.moveTo(40, 3);
+    ctx.quadraticCurveTo(32, -16, 2, -16);
+    ctx.quadraticCurveTo(-30, -14, -44, -2);
+    ctx.lineTo(-60, -12 + wag); ctx.lineTo(-54, 0 + wag * .5); ctx.lineTo(-60, 12 + wag);
+    ctx.lineTo(-44, 3);
+    ctx.quadraticCurveTo(-18, 14, 12, 12);
+    ctx.quadraticCurveTo(30, 10, 40, 3);
+    ctx.closePath(); ctx.fill();
+    // dorsal & flipper
+    ctx.fillStyle = '#56758b';
+    ctx.beginPath(); ctx.moveTo(-4, -15); ctx.quadraticCurveTo(-14, -30, -20, -31); ctx.lineTo(-18, -13); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(10, 8); ctx.lineTo(0, 20); ctx.lineTo(-2, 9); ctx.closePath(); ctx.fill();
+    // belly
+    ctx.fillStyle = 'rgba(230, 240, 245, .55)';
+    ctx.beginPath(); ctx.ellipse(12, 7, 22, 4, 0, 0, Math.PI * 2); ctx.fill();
+    // eye (angry)
+    ctx.fillStyle = '#081820';
+    ctx.beginPath(); ctx.arc(24, -4, 2.4, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#081820'; ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.moveTo(19, -10); ctx.lineTo(28, -7); ctx.stroke();
+    // blowhole
+    const charging = f.state === 'charge';
+    const firing = f.state === 'fire';
+    ctx.fillStyle = firing ? '#fff' : charging ? (Math.sin(t * 40) > 0 ? '#ff3d8b' : '#ffd1e3') : '#2d4555';
+    ctx.beginPath(); ctx.arc(6, -15.5, charging || firing ? 3.6 : 2, 0, Math.PI * 2); ctx.fill();
+    if (charging || firing) {
+      ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createRadialGradient(6, -16, 0, 6, -16, 26);
+      g.addColorStop(0, 'rgba(255, 61, 139, .8)'); g.addColorStop(1, 'rgba(255, 61, 139, 0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(6, -16, 26, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function beamEnd(f) {
+    let dx = f.tx - f.bx, dy = f.ty - f.by;
+    const len = Math.hypot(dx, dy); dx /= len; dy /= len;
+    return [f.bx + dx * 3000, f.by + dy * 3000];
+  }
+
+  function drawBeams(t) {
+    for (const f of dolphins) {
+      if (f.state === 'charge') {
+        const [ex, ey] = beamEnd(f);
+        const d = difficulty();
+        const k = 1 - f.t / d.charge;
+        ctx.save();
+        ctx.setLineDash([8, 10]);
+        ctx.lineDashOffset = -t * 60;
+        ctx.strokeStyle = `rgba(255, 61, 139, ${.18 + k * .45})`;
+        ctx.lineWidth = 1.5 + k * 2;
+        ctx.beginPath(); ctx.moveTo(f.bx, f.by); ctx.lineTo(ex, ey); ctx.stroke();
+        ctx.restore();
+      } else if (f.state === 'fire') {
+        const [ex, ey] = beamEnd(f);
+        const flick = .85 + Math.random() * .15;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.lineCap = 'round';
+        [[34, 'rgba(255, 61, 139, .18)'], [18, 'rgba(255, 61, 139, .5)'], [8, 'rgba(255, 150, 200, .9)'], [3, '#ffffff']]
+          .forEach(([w, c]) => { ctx.strokeStyle = c; ctx.lineWidth = w * flick; ctx.beginPath(); ctx.moveTo(f.bx, f.by); ctx.lineTo(ex, ey); ctx.stroke(); });
+        ctx.restore();
+      }
+    }
+  }
+
+  function drawSwimmer(t) {
+    if (invuln > 0 && state === 'play' && Math.floor(invuln * 12) % 2) return;
+    const x = swimmer.x, y = surfaceY + wave(x, t) - 2;
+    const s = swimmer.stroke;
+    // wake ripples
+    ctx.strokeStyle = 'rgba(205, 243, 246, .5)'; ctx.lineWidth = 1.5;
+    for (let i = 1; i <= 2; i++) {
+      ctx.beginPath(); ctx.ellipse(x, y + 3, 16 + i * 7 + Math.sin(s + i) * 2, 3 + i, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    // submerged body
+    ctx.fillStyle = 'rgba(20, 70, 85, .8)';
+    ctx.beginPath(); ctx.ellipse(x, y + 12, 9, 16, 0, 0, Math.PI * 2); ctx.fill();
+    // arms (freestyle-ish)
+    ctx.strokeStyle = '#e9b48f'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    const a1 = Math.sin(s), a2 = Math.sin(s + Math.PI);
+    ctx.beginPath(); ctx.moveTo(x - 7, y + 2); ctx.lineTo(x - 16 - a1 * 5, y - 6 - a1 * 10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + 7, y + 2); ctx.lineTo(x + 16 + a2 * 5, y - 6 - a2 * 10); ctx.stroke();
+    // head
+    ctx.fillStyle = '#f0c09a';
+    ctx.beginPath(); ctx.arc(x, y - 6, 9, 0, Math.PI * 2); ctx.fill();
+    // cap
+    ctx.fillStyle = '#ffb13b';
+    ctx.beginPath(); ctx.arc(x, y - 7, 9.5, Math.PI * 1.02, Math.PI * 1.98); ctx.fill();
+    // goggles
+    ctx.fillStyle = '#1b2a33';
+    ctx.fillRect(x - 7, y - 7, 5, 3.5); ctx.fillRect(x + 2, y - 7, 5, 3.5);
+  }
+
+  function drawSparks() {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const s of sparks) {
+      ctx.fillStyle = `rgba(255, ${120 + Math.random() * 120 | 0}, 190, ${Math.min(1, s.life * 2)})`;
+      ctx.beginPath(); ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // ---------- loop ----------
+  let last = performance.now(), clock = 0;
+  function frame(now) {
+    const dt = Math.min(.05, (now - last) / 1000);
+    last = now; clock += dt;
+    if (state === 'play') update(dt);
+    else {
+      // idle demo: swimmer bobs, dolphins cruise without firing
+      if (!swimmer) reset();
+      swimmer.stroke += dt * 3;
+      for (const f of dolphins) {
+        f.bob += dt * 3; f.x += f.vx * dt;
+        if (f.x < 50 || f.x > W - 50) { f.vx *= -1; f.x = Math.max(50, Math.min(W - 50, f.x)); }
+        f.dir = Math.sign(f.vx);
+        if (f.state !== 'swim') f.state = 'swim';
+      }
+      for (const s of sparks) { s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 400 * dt; s.life -= dt; }
+      sparks = sparks.filter(s => s.life > 0);
+    }
+
+    ctx.save();
+    if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+    drawScene(clock);
+    for (const f of dolphins) drawDolphin(f, clock);
+    drawBeams(clock);
+    drawSwimmer(clock);
+    drawSparks();
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+  reset();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
