@@ -37,10 +37,34 @@
   .hud .meta { display: flex; gap: 16px; font-size: 14px; color: var(--foam); text-transform: uppercase; letter-spacing: .08em; }
   .hud .lives { color: var(--laser); letter-spacing: .15em; font-size: 18px; }
   .overlay {
-    position: absolute; inset: 0; display: grid; place-items: center;
-    padding-inline: 16px; background: rgba(4, 22, 31, .6);
+    position: absolute; inset: 0; display: flex; overflow-y: auto;
+    padding-inline: 16px; background: rgba(4, 22, 31, .66);
   }
-  .card { max-width: 440px; text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .card { margin: auto; padding-block: 24px; max-width: 440px; text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .board { width: 100%; max-width: 320px; text-align: left; }
+  .board h2 {
+    margin: 0 0 6px; font-family: 'Bungee', 'Rubik', sans-serif; font-weight: 400;
+    font-size: 14px; letter-spacing: .12em; color: var(--muted); text-align: center;
+  }
+  .board ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-variant-numeric: tabular-nums; }
+  .board li {
+    display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline;
+    padding: 5px 12px; border-radius: 6px; background: rgba(11, 52, 66, .75);
+  }
+  .board li.me { background: rgba(255, 61, 139, .28); }
+  .board .rank { color: var(--muted); font-size: 13px; }
+  .board .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .board .pts { font-family: 'Bungee', 'Rubik', sans-serif; color: var(--foam); }
+  .board .note { color: var(--muted); font-size: 14px; text-align: center; padding: 6px; }
+  form.post { display: flex; gap: 8px; width: 100%; max-width: 320px; }
+  form.post input {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 10px 14px;
+    border-radius: 999px; border: 1px solid #2d6f7e; background: #0b3442; color: var(--ink);
+  }
+  form.post input:focus-visible { outline: 2px solid var(--foam); outline-offset: 2px; }
+  form.post button { font-size: 14px; padding: 10px 18px; box-shadow: none; }
+  form.post button:disabled { opacity: .6; cursor: default; transform: none; }
+  #againBtn { margin-top: 4px; }
   .eyebrow { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
   h1 {
     margin: 0; font-family: 'Bungee', 'Rubik', sans-serif; font-weight: 400;
@@ -87,6 +111,7 @@
       <p>The pod below has blowhole lasers and a grudge. Stay on the surface, watch for the glowing blowholes, and swim out of the beam.</p>
       <p class="keys"><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> to swim · on a phone, drag your finger</p>
       <button id="startBtn" type="button">Dive in</button>
+      <div class="board" data-board></div>
     </div>
   </div>
 
@@ -99,6 +124,11 @@
         <div><b id="bestScore">0</b><small>Best</small></div>
         <div><b id="finalWave">1</b><small>Wave</small></div>
       </div>
+      <form class="post" id="postForm">
+        <input id="playerName" type="text" maxlength="16" placeholder="Your name" autocomplete="nickname" aria-label="Your name for the leaderboard">
+        <button id="postBtn" type="submit">Post score</button>
+      </form>
+      <div class="board" data-board></div>
       <button id="againBtn" type="button">Swim again</button>
     </div>
   </div>
@@ -176,6 +206,7 @@
 
   // ---------- input ----------
   window.addEventListener('keydown', e => {
+    if (e.target && e.target.tagName === 'INPUT') return;
     keys[e.key.toLowerCase()] = true;
     if ((e.key === ' ' || e.key === 'Enter') && state !== 'play') { e.preventDefault(); start(); }
     if (['arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) e.preventDefault();
@@ -203,9 +234,81 @@
     $('finalScore').textContent = score;
     $('bestScore').textContent = best;
     $('finalWave').textContent = level;
+    lastScore = score; lastWave = level; posted = false; myId = null;
+    $('postForm').hidden = score <= 0;
+    $('postBtn').disabled = false;
+    $('postBtn').textContent = 'Post score';
+    $('playerName').disabled = false;
     $('overScreen').hidden = false;
-    $('againBtn').focus();
+    loadBoard();
+    if (score > 0) $('playerName').focus(); else $('againBtn').focus();
   }
+
+  // ---------- shared leaderboard (Airtable) ----------
+  const AT = {
+    base: 'appXY1sU13Z6lIzsR',
+    table: 'tbllCSFVSpSkUfOPy',
+    token: 'pat08eUaYhvT1q50O.abe93525ab07753f7ff45d3116a61b6a5060536011025046ccae45c2ef83ebe9',
+  };
+  const API = `https://api.airtable.com/v0/${AT.base}/${AT.table}`;
+  let board = null, boardErr = false, myId = null, lastScore = 0, lastWave = 1, posted = false;
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  try { $('playerName').value = localStorage.getItem('laserDolphinsName') || ''; } catch (e) {}
+
+  async function loadBoard() {
+    try {
+      const q = new URLSearchParams({ 'sort[0][field]': 'Score', 'sort[0][direction]': 'desc', maxRecords: '10' });
+      const r = await fetch(`${API}?${q}`, { headers: { Authorization: `Bearer ${AT.token}` } });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      board = j.records
+        .filter(x => typeof x.fields.Score === 'number')
+        .map(x => ({ id: x.id, name: x.fields.Name || 'Anonymous', score: x.fields.Score }));
+      boardErr = false;
+    } catch (e) { boardErr = true; }
+    renderBoards();
+  }
+
+  function renderBoards() {
+    let h = '<h2>Top swimmers</h2>';
+    if (boardErr) h += '<div class="note">The leaderboard couldn’t load. Check your connection.</div>';
+    else if (!board) h += '<div class="note">Loading scores…</div>';
+    else if (!board.length) h += '<div class="note">No scores yet. Be the first.</div>';
+    else h += '<ol>' + board.map((b, i) =>
+      `<li class="${b.id === myId ? 'me' : ''}"><span class="rank">${i + 1}</span><span class="nm">${esc(b.name)}</span><span class="pts">${b.score}</span></li>`
+    ).join('') + '</ol>';
+    document.querySelectorAll('[data-board]').forEach(el => { el.innerHTML = h; });
+  }
+
+  $('postForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (posted || lastScore <= 0) return;
+    const name = $('playerName').value.trim().slice(0, 16) || 'Anonymous';
+    try { localStorage.setItem('laserDolphinsName', name); } catch (err) {}
+    const btn = $('postBtn');
+    btn.disabled = true; btn.textContent = 'Posting…';
+    try {
+      const r = await fetch(API, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${AT.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: [{ fields: { Name: name, Score: lastScore, Wave: lastWave } }], typecast: true }),
+      });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      myId = j.records && j.records[0] && j.records[0].id;
+      posted = true;
+      btn.textContent = 'Posted';
+      $('playerName').disabled = true;
+      $('againBtn').focus();
+      loadBoard();
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Try again';
+    }
+  });
+
+  renderBoards();
+  loadBoard();
 
   // ---------- update ----------
   function update(dt) {
